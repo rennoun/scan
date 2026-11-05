@@ -1,0 +1,141 @@
+import Foundation
+import RealityKit
+import SwiftUI
+
+/// Wraps Apple's ObjectCaptureSession: guided capture with LiDAR-assisted
+/// bounding box, automatic shots and coverage feedback.
+/// Must be created on the main thread.
+@MainActor
+final class ObjectCaptureModel: ObservableObject {
+    enum Phase: Equatable {
+        case initializing, ready, detecting, capturing, finishing, completed
+        case failed(String)
+    }
+
+    let session: ObjectCaptureSession
+    let project: ScanProject
+
+    @Published var phase: Phase = .initializing
+    @Published var feedback: [String] = []
+    @Published var shots: Int = 0
+    @Published var maxShots: Int = 0
+    @Published var pass: Int = 1
+
+    var onCompleted: (() -> Void)?
+
+    private var tasks: [Task<Void, Never>] = []
+    private var timer: Timer?
+    private var started = false
+
+    static var isSupported: Bool { ObjectCaptureSession.isSupported }
+
+    init(project: ScanProject) {
+        self.project = project
+        self.session = ObjectCaptureSession()
+    }
+
+    func start() {
+        guard !started else { return }
+        started = true
+        let store = ProjectStore.shared
+        var config = ObjectCaptureSession.Configuration()
+        config.checkpointDirectory = store.checkpointFolder(for: project)
+        config.isOverCaptureEnabled = true
+        session.start(imagesDirectory: store.imagesFolder(for: project), configuration: config)
+        Log.i("ObjectCaptureSession started for \(project.id)")
+
+        tasks.append(Task { [weak self] in
+            guard let self else { return }
+            for await state in self.session.stateUpdates {
+                self.handle(state)
+            }
+        })
+        tasks.append(Task { [weak self] in
+            guard let self else { return }
+            for await fb in self.session.feedbackUpdates {
+                self.feedback = fb.map { Self.describe($0) }.sorted()
+            }
+        })
+        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.shots = self.session.numberOfShotsTaken
+                self.maxShots = self.session.maximumNumberOfInputImages
+            }
+        }
+    }
+
+    private func handle(_ state: ObjectCaptureSession.CaptureState) {
+        switch state {
+        case .initializing: phase = .initializing
+        case .ready: phase = .ready
+        case .detecting: phase = .detecting
+        case .capturing: phase = .capturing
+        case .finishing: phase = .finishing
+        case .completed:
+            phase = .completed
+            Log.i("Capture completed: \(session.numberOfShotsTaken) shots")
+            stopListening()
+            onCompleted?()
+        case .failed(let error):
+            phase = .failed(error.localizedDescription)
+            Log.e("Capture failed: \(error.localizedDescription)")
+            stopListening()
+        @unknown default:
+            Log.w("Unknown capture state: \(String(describing: state))")
+        }
+    }
+
+    // MARK: User actions
+
+    func continueToDetect() {
+        if !session.startDetecting() { Log.w("startDetecting returned false") }
+    }
+
+    func startCapturing() { session.startCapturing() }
+    func resetBox() { session.resetDetection() }
+
+    func newPass() {
+        session.beginNewScanPass()
+        pass += 1
+        Log.i("New scan pass \(pass)")
+    }
+
+    func flipAndNewPass() {
+        session.beginNewScanPassAfterFlip()
+        pass += 1
+        Log.i("New scan pass after flip \(pass)")
+    }
+
+    func finish() { session.finish() }
+
+    func cancel() {
+        session.cancel()
+        stopListening()
+        Log.i("Capture cancelled")
+    }
+
+    private func stopListening() {
+        timer?.invalidate()
+        timer = nil
+        tasks.forEach { $0.cancel() }
+        tasks.removeAll()
+    }
+
+    /// Human text for feedback flags. Matched on the case name so new SDK cases don't break the build.
+    private static func describe(_ f: ObjectCaptureSession.Feedback) -> String {
+        let key = String(describing: f)
+        let map: [String: String] = [
+            "objectTooClose": "Move back a little",
+            "objectTooFar": "Move closer",
+            "movingTooFast": "Slow down",
+            "environmentLowLight": "More light needed",
+            "environmentTooDark": "Too dark",
+            "outOfFieldOfView": "Keep the object in view",
+            "objectNotFlippable": "Don't flip this object",
+            "overCapturing": "Enough shots here, move on",
+            "objectNotDetected": "Object not detected",
+        ]
+        return map[key] ?? key
+    }
+}

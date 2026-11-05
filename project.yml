@@ -1,0 +1,28 @@
+name: Mizan3D
+options:
+  bundleIdPrefix: ma.mizan
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+targets:
+  Mizan3D:
+    type: application
+    platform: iOS
+    scheme: {}
+    sources:
+      - path: Mizan3D
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ma.mizan.scanner
+        PRODUCT_NAME: Mizan3D
+        INFOPLIST_FILE: Mizan3D/Info.plist
+        TARGETED_DEVICE_FAMILY: "1"
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_BITCODE: NO
+        CODE_SIGN_STYLE: Automatic

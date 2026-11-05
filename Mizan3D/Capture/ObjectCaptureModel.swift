@@ -41,9 +41,7 @@ final class ObjectCaptureModel: ObservableObject {
         var config = ObjectCaptureSession.Configuration()
         config.checkpointDirectory = store.checkpointFolder(for: project)
         config.isOverCaptureEnabled = true
-        session.start(imagesDirectory: store.imagesFolder(for: project), configuration: config)
-        Log.i("ObjectCaptureSession started for \(project.id)")
-
+        // Listen first, then start, so the first state changes aren't missed.
         tasks.append(Task { [weak self] in
             guard let self else { return }
             for await state in self.session.stateUpdates {
@@ -56,16 +54,27 @@ final class ObjectCaptureModel: ObservableObject {
                 self.feedback = fb.map { Self.describe($0) }.sorted()
             }
         })
-        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+        session.start(imagesDirectory: store.imagesFolder(for: project), configuration: config)
+        Log.i("ObjectCaptureSession started for \(project.id)")
+
+        // Safety net: also poll the session state, in case an update is missed.
+        timer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
+                self.handle(self.session.state)
                 self.shots = self.session.numberOfShotsTaken
                 self.maxShots = self.session.maximumNumberOfInputImages
             }
         }
     }
 
+    private var lastStateKey = ""
+
     private func handle(_ state: ObjectCaptureSession.CaptureState) {
+        let key = String(describing: state)
+        guard key != lastStateKey else { return }
+        lastStateKey = key
+        Log.i("Capture state -> \(key)")
         switch state {
         case .initializing: phase = .initializing
         case .ready: phase = .ready

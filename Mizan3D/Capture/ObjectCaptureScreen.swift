@@ -42,6 +42,17 @@ struct ObjectCaptureScreen: View {
                     .background(.ultraThinMaterial, in: Circle())
             }
             Spacer()
+            if model.phase == .ready || model.phase == .detecting || model.phase == .initializing {
+                Button {
+                    if model.autoMode { model.pauseAuto() } else { model.resumeAuto() }
+                } label: {
+                    Label(model.autoMode ? "Auto" : "Manual", systemImage: model.autoMode ? "wand.and.stars" : "hand.tap")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: Capsule())
+                }
+                .foregroundStyle(model.autoMode ? Theme.accent : .white)
+            }
             if case .capturing = model.phase {
                 HStack(spacing: 6) {
                     Circle().fill(.red).frame(width: 8, height: 8)
@@ -87,19 +98,32 @@ struct ObjectCaptureScreen: View {
             ProgressView("Starting camera…").padding().background(.ultraThinMaterial, in: Capsule())
         case .ready:
             VStack(spacing: 8) {
-                hint("Aim the dot at the object")
+                hint(model.autoMode ? "Aim the dot at the object — it locks on automatically" : "Aim the dot at the object")
                 bigButton("Continue", systemImage: "viewfinder") { model.continueToDetect() }
             }
         case .detecting:
             VStack(spacing: 8) {
-                hint("Drag the box edges to fit the object")
+                if let n = model.countdown {
+                    Text(verbatim: "Object found · capturing in \(n)…")
+                        .font(.headline)
+                        .padding(.horizontal, 16).padding(.vertical, 8)
+                        .background(Theme.accent.opacity(0.9), in: Capsule())
+                        .foregroundStyle(.black)
+                } else {
+                    hint("Drag the box edges to fit the object")
+                }
                 HStack(spacing: 12) {
-                    smallButton("Reset box", systemImage: "arrow.counterclockwise") { model.resetBox() }
+                    if model.countdown != nil {
+                        smallButton("Adjust box", systemImage: "hand.draw") { model.pauseAuto() }
+                    } else {
+                        smallButton("Reset box", systemImage: "arrow.counterclockwise") { model.resetBox() }
+                    }
                     bigButton("Start capture", systemImage: "record.circle") { model.startCapturing() }
                 }
             }
         case .capturing:
             VStack(spacing: 8) {
+                if model.passComplete { passCompleteCard }
                 hint("Move slowly around the object")
                 HStack(spacing: 10) {
                     smallButton("New pass", systemImage: "arrow.triangle.2.circlepath") { model.newPass() }
@@ -120,6 +144,19 @@ struct ObjectCaptureScreen: View {
             .padding()
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
         }
+    }
+
+    private var passCompleteCard: some View {
+        VStack(spacing: 6) {
+            Label("Orbit \(model.pass) complete", systemImage: "checkmark.circle.fill")
+                .font(.headline).foregroundStyle(Theme.accent)
+            Text(model.pass == 1
+                 ? "Do a second pass from a lower angle, or flip the object to scan its bottom."
+                 : "Flip the object for the bottom, or tap Finish.")
+                .font(.footnote).multilineTextAlignment(.center)
+        }
+        .padding(12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
     }
 
     private func hint(_ text: String) -> some View {

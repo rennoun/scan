@@ -150,6 +150,22 @@ struct ProjectDetailView: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
+            Button {
+                viewer.setClean(!viewer.cleanOn)
+            } label: {
+                if viewer.cleaning {
+                    HStack(spacing: 8) { ProgressView(); Text("Removing table & noise…") }
+                } else {
+                    Label(viewer.cleanOn ? "Clean: ON (table & noise removed) · show original" : "Remove table & noise",
+                          systemImage: viewer.cleanOn ? "checkmark.seal.fill" : "scissors")
+                }
+            }
+            .buttonStyle(.bordered)
+            .font(.footnote.weight(.semibold))
+            .disabled(!viewer.isLoaded || viewer.cleaning)
+            if let summary = viewer.cleanSummary {
+                Text(summary).font(.caption2).foregroundStyle(.secondary)
+            }
             if let e = viewer.loadError {
                 Text(e).font(.caption).foregroundStyle(.red)
             }
@@ -256,7 +272,7 @@ struct ProjectDetailView: View {
         guard let p = project, p.status == .ready, let url = store.modelURL(for: p) else { return }
         guard loadedModelURL != url else { return }
         loadedModelURL = url
-        viewer.load(url: url, scale: p.scaleFactor)
+        viewer.load(url: url, scale: p.scaleFactor, autoClean: p.mode == .object)
     }
 
     private func applyRealLength() {

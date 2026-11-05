@@ -58,12 +58,13 @@ struct MeshData {
     }
 
     /// Flatten every triangle geometry under a SceneKit node into world space.
-    static func from(node root: SCNNode) -> MeshData {
+    /// `reference`: express positions in that node's space (nil = world space).
+    static func from(node root: SCNNode, relativeTo reference: SCNNode? = nil) -> MeshData {
         var mesh = MeshData()
         root.enumerateHierarchy { node, _ in
             guard let geometry = node.geometry,
                   let source = geometry.sources(for: .vertex).first else { return }
-            let world = node.simdWorldTransform
+            let world = reference.map { node.simdConvertTransform(matrix_identity_float4x4, to: $0) } ?? node.simdWorldTransform
             let base = UInt32(mesh.positions.count)
             for v in readVectors(source) {
                 let w = world * SIMD4<Float>(v.x, v.y, v.z, 1)

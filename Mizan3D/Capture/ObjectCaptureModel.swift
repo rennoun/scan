@@ -20,6 +20,12 @@ final class ObjectCaptureModel: ObservableObject {
     @Published var shots: Int = 0
     @Published var maxShots: Int = 0
     @Published var pass: Int = 1
+    /// Auto mode: find the object, fit the box and start capturing without taps.
+    @Published var autoMode = true
+    @Published var countdown: Int?          // seconds before auto capture starts
+    @Published var passComplete = false     // user finished an orbit
+
+    private var autoTask: Task<Void, Never>?
 
     var onCompleted: (() -> Void)?
 
@@ -62,6 +68,10 @@ final class ObjectCaptureModel: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.handle(self.session.state)
+                if case .capturing = self.phase {
+                    let done = self.session.userCompletedScanPass
+                    if done != self.passComplete { self.passComplete = done }
+                }
                 self.shots = self.session.numberOfShotsTaken
                 self.maxShots = self.session.maximumNumberOfInputImages
             }
@@ -77,9 +87,15 @@ final class ObjectCaptureModel: ObservableObject {
         Log.i("Capture state -> \(key)")
         switch state {
         case .initializing: phase = .initializing
-        case .ready: phase = .ready
-        case .detecting: phase = .detecting
-        case .capturing: phase = .capturing
+        case .ready:
+            phase = .ready
+            if autoMode { autoDetect() }
+        case .detecting:
+            phase = .detecting
+            if autoMode { autoStartCapture() }
+        case .capturing:
+            phase = .capturing
+            countdown = nil
         case .finishing: phase = .finishing
         case .completed:
             phase = .completed
@@ -95,6 +111,59 @@ final class ObjectCaptureModel: ObservableObject {
         }
     }
 
+    // MARK: Auto mode
+
+    /// Keep trying to lock onto whatever is under the centre dot.
+    private func autoDetect() {
+        autoTask?.cancel()
+        autoTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            for attempt in 0..<20 {
+                guard let self, !Task.isCancelled, self.autoMode, case .ready = self.phase else { return }
+                if self.session.startDetecting() {
+                    Log.i("Auto: object detected (attempt \(attempt + 1))")
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+    }
+
+    /// Give the user 3 s to see the box, then start capturing.
+    private func autoStartCapture() {
+        autoTask?.cancel()
+        autoTask = Task { [weak self] in
+            for n in stride(from: 3, through: 1, by: -1) {
+                guard let self, !Task.isCancelled, self.autoMode, case .detecting = self.phase else {
+                    self?.countdown = nil
+                    return
+                }
+                self.countdown = n
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+            guard let self, !Task.isCancelled, self.autoMode, case .detecting = self.phase else { return }
+            self.countdown = nil
+            Log.i("Auto: starting capture")
+            self.session.startCapturing()
+        }
+    }
+
+    /// User wants to adjust the box by hand: stop the auto countdown.
+    func pauseAuto() {
+        autoMode = false
+        autoTask?.cancel()
+        countdown = nil
+    }
+
+    func resumeAuto() {
+        autoMode = true
+        switch phase {
+        case .ready: autoDetect()
+        case .detecting: autoStartCapture()
+        default: break
+        }
+    }
+
     // MARK: User actions
 
     func continueToDetect() {
@@ -105,12 +174,14 @@ final class ObjectCaptureModel: ObservableObject {
     func resetBox() { session.resetDetection() }
 
     func newPass() {
+        passComplete = false
         session.beginNewScanPass()
         pass += 1
         Log.i("New scan pass \(pass)")
     }
 
     func flipAndNewPass() {
+        passComplete = false
         session.beginNewScanPassAfterFlip()
         pass += 1
         Log.i("New scan pass after flip \(pass)")
@@ -125,6 +196,7 @@ final class ObjectCaptureModel: ObservableObject {
     }
 
     private func stopListening() {
+        autoTask?.cancel()
         timer?.invalidate()
         timer = nil
         tasks.forEach { $0.cancel() }

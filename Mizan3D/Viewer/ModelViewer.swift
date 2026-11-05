@@ -11,6 +11,13 @@ final class ViewerController: ObservableObject {
     @Published var measuring = false { didSet { if !measuring { clearMeasurement() } } }
     @Published var distanceMM: Double?
     @Published var stats = ""
+    /// "Remove table & noise" view (grey mesh) vs. original textured model.
+    @Published private(set) var cleanOn = false
+    @Published private(set) var cleaning = false
+    @Published var cleanSummary: String?
+
+    private var originalNode: SCNNode?
+    private var cleanNode: SCNNode?
 
     let scene = SCNScene()
     /// Holds the model; its scale = project.scaleFactor.
@@ -31,8 +38,12 @@ final class ViewerController: ObservableObject {
         scene.rootNode.addChildNode(ambient)
     }
 
-    func load(url: URL, scale: Double) {
+    func load(url: URL, scale: Double, autoClean: Bool = false) {
         container.childNodes.forEach { $0.removeFromParentNode() }
+        originalNode = nil
+        cleanNode = nil
+        cleanOn = false
+        cleanSummary = nil
         DispatchQueue.global(qos: .userInitiated).async {
             var node: SCNNode?
             var triangles = 0
@@ -62,12 +73,51 @@ final class ViewerController: ObservableObject {
                 let centre = SCNVector3((lo.x + hi.x) / 2, (lo.y + hi.y) / 2, (lo.z + hi.z) / 2)
                 node.position = SCNVector3(-centre.x, -centre.y, -centre.z)
                 self.container.addChildNode(node)
+                self.originalNode = node
                 self.setScale(scale)
                 let size = SIMD3<Float>(hi.x - lo.x, hi.y - lo.y, hi.z - lo.z)
                 self.markerRadius = CGFloat(max(simd_length(size), 0.01) * 0.006)
                 self.stats = "\(triangles.formatted()) triangles"
                 self.isLoaded = true
                 self.view?.pointOfView = nil   // let SceneKit re-frame
+                if autoClean { self.setClean(true) }
+            }
+        }
+    }
+
+    // MARK: Clean (remove support plane + floating noise)
+
+    func setClean(_ on: Bool) {
+        guard let originalNode, !cleaning else { return }
+        clearMeasurement()
+        if !on {
+            cleanNode?.removeFromParentNode()
+            if originalNode.parent == nil { container.addChildNode(originalNode) }
+            cleanOn = false
+            return
+        }
+        if let cleanNode {
+            originalNode.removeFromParentNode()
+            if cleanNode.parent == nil { container.addChildNode(cleanNode) }
+            cleanOn = true
+            return
+        }
+        cleaning = true
+        let container = self.container
+        DispatchQueue.global(qos: .userInitiated).async {
+            let raw = MeshData.from(node: originalNode, relativeTo: container)
+            let (mesh, report) = raw.cleaned()
+            DispatchQueue.main.async {
+                self.cleaning = false
+                self.cleanSummary = report.summary
+                Log.i("Clean: \(report.summary)")
+                guard report.trianglesAfter < report.trianglesBefore else { return }
+                let node = mesh.makeNode()   // already in container space
+                self.cleanNode = node
+                originalNode.removeFromParentNode()
+                container.addChildNode(node)
+                self.cleanOn = true
+                self.stats = "\(mesh.triangleCount.formatted()) triangles"
             }
         }
     }
